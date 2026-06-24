@@ -30,11 +30,13 @@ CONFIRMED (read live from your workspace / DuoPlus public docs):
     Status, Batch Modify Parameters, Proxy Initialization, Execute the ADB
     command, and the advanced "Dump UIAutomator XML" command. Proxies are
     SOCKS5-only and GPS auto-syncs from the bound proxy's IP geolocation.
+  - DuoPlus transport (from API intro): base https://openapi.duoplus.net,
+    auth header "DuoPlus-API-Key", EVERY call is POST with a {code,data,message}
+    envelope (code==200 = OK). Handled centrally in _duo() below.
 
-MUST VERIFY against help.duoplus.net/docs/api-reference (marked  # CONFIRM):
-  - Exact base URL, auth header name, and the JSON body/response shape of
-    each DuoPlus endpoint. I did NOT invent these; placeholders are clearly
-    flagged so you fill them from the Introduction + per-endpoint pages.
+STILL MUST VERIFY per endpoint page (marked  # CONFIRM):
+  - The exact PATH and request BODY field names for each endpoint, and where
+    the value lives inside the response `data`.
   - Whether Batch Modify Parameters accepts raw lat/lng. If not, location is
     proxy-derived and you pin it by assigning a metro-correct SOCKS5 proxy.
 ===========================================================================
@@ -57,8 +59,8 @@ import requests
 TWENTY_BASE   = os.environ.get("TWENTY_BASE", "https://ai-infrastructure.twenty.com/rest")
 TWENTY_TOKEN  = os.environ["TWENTY_TOKEN"]               # Settings > APIs in Twenty
 
-DUOPLUS_BASE  = os.environ.get("DUOPLUS_BASE", "https://api.duoplus.net")   # CONFIRM
-DUOPLUS_TOKEN = os.environ["DUOPLUS_TOKEN"]              # CONFIRM header name below
+DUOPLUS_BASE  = os.environ.get("DUOPLUS_BASE", "https://openapi.duoplus.net")
+DUOPLUS_KEY   = os.environ["DUOPLUS_TOKEN"]             # console: Automation -> API menu
 
 STALE_HOURS   = int(os.environ.get("STALE_HOURS", "20"))   # re-audit if older than this
 TOP_N         = int(os.environ.get("TOP_N", "20"))         # how deep to scan organic
@@ -66,7 +68,20 @@ CHROME_PKG    = "com.android.chrome"
 GL, HL        = "us", "en"                                  # country / language for google
 
 S_T = requests.Session(); S_T.headers.update({"Authorization": f"Bearer {TWENTY_TOKEN}"})
-S_D = requests.Session(); S_D.headers.update({"Authorization": f"Bearer {DUOPLUS_TOKEN}"})  # CONFIRM
+S_D = requests.Session()
+S_D.headers.update({"DuoPlus-API-Key": DUOPLUS_KEY, "Content-Type": "application/json", "Lang": "en"})
+
+
+def _duo(path, payload=None):
+    """All DuoPlus calls are POST and return {code, data, message}; code==200 = OK.
+    Auth header / method / envelope are CONFIRMED from DuoPlus's API intro.
+    Per-endpoint path + body field names are still CONFIRM (from each endpoint page)."""
+    r = S_D.post(f"{DUOPLUS_BASE}{path}", json=payload or {})
+    r.raise_for_status()
+    j = r.json()
+    if j.get("code") != 200:
+        raise RuntimeError(f"DuoPlus {path} -> code {j.get('code')}: {j.get('message')}")
+    return j.get("data")
 
 
 # ----------------------------------------------------------------------------
@@ -131,52 +146,44 @@ def update_task(task_id, *, real_rank, status, screenshot_url=None,
 # DuoPlus client  (endpoint names are real; bodies are CONFIRM placeholders)
 # ----------------------------------------------------------------------------
 class DuoPlus:
-    """One method per real endpoint. Fill request/response shapes from
-    help.duoplus.net/docs/api-reference — every uncertain line is # CONFIRM."""
+    """All calls POST via _duo(). Auth header, method, and {code,data,message}
+    envelope are confirmed from DuoPlus's API intro. The per-endpoint PATH and
+    BODY field names below are still CONFIRM — fill from each endpoint page."""
 
     def init_proxy(self, device_id, proxy_id):
         # Proxy Initialization — binds the SOCKS5 proxy; GPS/SIM/timezone then
         # auto-sync from the proxy IP's geolocation.
-        return S_D.post(f"{DUOPLUS_BASE}/cloudphone/proxy/init",            # CONFIRM
-                        json={"ids": [device_id], "proxyId": proxy_id})     # CONFIRM
+        return _duo("/cloudphone/proxy/init",                              # CONFIRM path
+                    {"ids": [device_id], "proxyId": proxy_id})             # CONFIRM body
 
     def set_location(self, device_id, lat, lng):
-        # Batch Modify Parameters — pin exact coordinates IF supported.
-        # If the API rejects raw coords, delete this call and rely on a
-        # metro-correct proxy instead (location follows the IP).
-        return S_D.post(f"{DUOPLUS_BASE}/cloudphone/params/modify",        # CONFIRM
-                        json={"ids": [device_id],
-                              "latitude": lat, "longitude": lng})           # CONFIRM field names
+        # Batch Modify Parameters — pin coordinates IF supported. If the API
+        # rejects raw coords, drop this and rely on a metro-correct proxy
+        # (location follows the IP).
+        return _duo("/cloudphone/params/modify",                           # CONFIRM path
+                    {"ids": [device_id], "latitude": lat, "longitude": lng})  # CONFIRM body
 
     def power_on(self, device_id):
-        return S_D.post(f"{DUOPLUS_BASE}/cloudphone/power/on",             # CONFIRM
-                        json={"ids": [device_id]})                          # CONFIRM
+        return _duo("/cloudphone/power/on", {"ids": [device_id]})          # CONFIRM path/body
 
     def status(self, device_id):
-        r = S_D.get(f"{DUOPLUS_BASE}/cloudphone/status",                   # CONFIRM
-                    params={"ids": device_id})
-        return r.json()                                                     # CONFIRM shape
+        return _duo("/cloudphone/status", {"ids": [device_id]})            # CONFIRM path/body
 
     def adb(self, device_id, cmd):
-        """Execute the ADB command. Returns stdout text."""
-        r = S_D.post(f"{DUOPLUS_BASE}/cloudphone/adb/exec",               # CONFIRM
-                     json={"ids": [device_id], "command": cmd})            # CONFIRM
-        r.raise_for_status()
-        # CONFIRM where stdout lives in the response:
-        return r.json().get("data", {}).get("stdout", "")
+        """Execute the ADB command. Returns stdout text from data (CONFIRM key)."""
+        data = _duo("/cloudphone/adb/exec",                                # CONFIRM path
+                    {"ids": [device_id], "command": cmd})                  # CONFIRM body
+        return (data or {}).get("stdout", "")                              # CONFIRM key
 
     def ui_dump(self, device_id):
-        """Advanced command: Dump UIAutomator XML. Returns the hierarchy XML."""
-        r = S_D.post(f"{DUOPLUS_BASE}/cloudphone/adb/uiautomator-dump",   # CONFIRM
-                     json={"ids": [device_id]})
-        r.raise_for_status()
-        return r.json().get("data", {}).get("xml", "")                    # CONFIRM
+        """Dump UIAutomator XML. Returns the hierarchy XML from data (CONFIRM key)."""
+        data = _duo("/cloudphone/adb/uiautomator-dump", {"ids": [device_id]})  # CONFIRM
+        return (data or {}).get("xml", "")                                 # CONFIRM key
 
     def wait_booted(self, device_id, timeout=180):
         deadline = time.time() + timeout
         while time.time() < deadline:
-            out = self.adb(device_id, "getprop sys.boot_completed").strip()
-            if out == "1":
+            if self.adb(device_id, "getprop sys.boot_completed").strip() == "1":
                 return True
             time.sleep(5)
         raise TimeoutError(f"{device_id} did not boot in {timeout}s")
