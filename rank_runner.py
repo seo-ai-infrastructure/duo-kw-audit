@@ -87,24 +87,52 @@ def _duo(path, payload=None):
 # ----------------------------------------------------------------------------
 # Twenty client
 # ----------------------------------------------------------------------------
+def _extract_rows(j, plural):
+    """Find the record list in a Twenty REST response regardless of envelope:
+    handles {"data":{"<plural>":[...]}}, {"data":[...]}, or a bare [...]."""
+    if isinstance(j, list):
+        return j
+    if not isinstance(j, dict):
+        return []
+    data = j.get("data", j)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get(plural), list):
+            return data[plural]
+        for v in data.values():                  # fallback: first list value
+            if isinstance(v, list):
+                return v
+    return []
+
+
 def get_due_tasks():
     """Pull active tasks and decide 'due' in Python (avoids version-specific
     REST filter syntax). N is small, so this is fine."""
-    # depth=0 keeps the payload to scalar fields only.
-    r = S_T.get(f"{TWENTY_BASE}/localsearchtasks",
-                params={"limit": 200, "depth": 0})
+    r = S_T.get(f"{TWENTY_BASE}/localsearchtasks", params={"limit": 200, "depth": 0})
     r.raise_for_status()
-    rows = r.json().get("data", {}).get("localsearchtasks", [])
+    j = r.json()
+    rows = _extract_rows(j, "localsearchtasks")
+    # One-shot diagnostic: envelope keys, row count, and the actual field keys
+    # on the first row (catches both wrong-envelope and wrong-field-name cases).
+    print(f"[debug] HTTP {r.status_code} | "
+          f"top_keys={list(j.keys()) if isinstance(j, dict) else type(j).__name__} | "
+          f"rows={len(rows)} | "
+          f"first_row_keys={sorted(rows[0].keys()) if rows else None}")
+
     now = dt.datetime.now(dt.timezone.utc)
     due = []
     for t in rows:
-        if t.get("active") is False:                     # field may not exist yet -> None -> included
+        if t.get("active") is False:                     # null -> included
             continue
         last = t.get("lastCheckedAt")
         if last:
-            age = now - dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
-            if age < dt.timedelta(hours=STALE_HOURS):
-                continue
+            try:
+                age = now - dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
+                if age < dt.timedelta(hours=STALE_HOURS):
+                    continue
+            except ValueError:
+                pass
         if not t.get("keyword") or not t.get("targetCoords"):
             continue
         due.append(t)
