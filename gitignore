@@ -1,0 +1,25 @@
+# ── Secrets — NEVER commit (these belong in GitHub Actions Secrets) ──
+.env
+*.env
+rankrunner.env
+.config/
+secrets.*
+*.pem
+*.key
+
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ── Runner scratch (SERP screenshots etc., if written locally) ───────
+serp/
+*.png
+
+# ── macOS ───────────────────────────────────────────────────────────
+.DS_Store
