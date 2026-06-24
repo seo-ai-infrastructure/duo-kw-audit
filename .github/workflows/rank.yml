@@ -1,0 +1,33 @@
+name: Local Rank Audit
+
+# Three ways to fire this:
+on:
+  repository_dispatch:
+    types: [rank-run]      # ← Twenty's CRON workflow triggers this via the GitHub API
+  workflow_dispatch: {}     # ← manual "Run workflow" button in the Actions tab
+  # schedule:               # ← OR let GitHub own the schedule instead of Twenty.
+  #   - cron: "0 9 * * *"   #   09:00 UTC daily. NOTE: GitHub cron is UTC and
+  #                         #   best-effort (can drift; pauses after ~60d repo idle).
+
+concurrency:
+  group: rank-audit
+  cancel-in-progress: false  # let an in-flight batch finish; don't stack runs
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120     # plenty for an all-HTTP DuoPlus batch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Run rank audit
+        env:
+          TWENTY_BASE:   ${{ secrets.TWENTY_BASE }}    # https://ai-infrastructure.twenty.com/rest
+          TWENTY_TOKEN:  ${{ secrets.TWENTY_TOKEN }}
+          DUOPLUS_BASE:  ${{ secrets.DUOPLUS_BASE }}
+          DUOPLUS_TOKEN: ${{ secrets.DUOPLUS_TOKEN }}
+          STALE_HOURS:   "20"
+        run: python rank_runner.py
